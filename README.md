@@ -25,7 +25,7 @@ For investors:
 - Platform deployment readiness model with documentation-grounded skills
 - Clear path from content production to social distribution automation
 
-## Current State (April 2026)
+## Current State (November 2026)
 
 - Branding and product framing set to Beast AI Agentic Content Foundry
 - Agent Lee orchestration lane supports:
@@ -33,10 +33,14 @@ For investors:
    - `hivemind` (manifest-based)
    - `gemini` (provider-first with fallback)
 - Platform API skill manifest generation implemented (`public/platform-api-skills.json`)
+- Content Vault is the project working set between source inputs, Continuum references, Office Suites, and Leeway IDE
+- Workspace state persists locally with project identity, nodes, edges, artifacts, settings, camera, and staged handoffs
+- Office Suites and Leeway IDE handoffs produce portable `leeway.handoff.v1` JSON packets and retain a receipt artifact in the Vault
+- Run Routine executes the local workflow preview in dependency order and saves an evidence manifest; platform nodes remain explicitly `prepared / connector pending` until a real connector returns evidence
 - UI improvements completed:
    - Collapsed-node connection alignment
    - Color-coded connection lines by action/category
-   - Wallet renamed to Content Wallet
+   - Content Wallet renamed to Content Vault
    - Header/hero/right-panel logo and targeted-training messaging updates
 
 See full state snapshot in [docs/CURRENT_STATE.md](docs/CURRENT_STATE.md).
@@ -81,16 +85,19 @@ Dev server runs on port `7007`.
 ## Runtime Architecture
 
 1. Source inputs and transforms are represented as workflow nodes.
-2. Agent Lee maps intent to node sequences.
-3. HiveMind manifest contributes intent routing and roster metadata.
-4. Platform API skills provide deployment-grounded requirements.
-5. Execution state updates are reflected in UI and wallet artifacts.
+2. The Content Vault keeps project artifacts, handoff packets, and run evidence together as the working set.
+3. Agent Lee maps intent to node sequences and the local runner follows dependency order.
+4. HiveMind manifest contributes intent routing and roster metadata.
+5. Handoff packets preserve project, artifact, provenance, and acceptance criteria for Office Suites or Leeway IDE.
+6. Platform API skills provide deployment-grounded requirements; external publishing is only claimed after connector evidence.
 
 ## Governance And Standards
 
 - Standards root: `LeeWay-Standards/`
 - Primary runtime policy: `LeeWay-Standards/.leeway/layer-policy.json`
 - App governance profile: `governance/leeway-application-governance.json`
+
+The current browser implementation uses local storage and portable packet downloads until an authorized shared Continuum/Runtime Fabric adapter is connected. The UI deliberately labels that boundary instead of implying that external execution already occurred.
 
 ## CI/CD (GitHub Actions)
 

@@ -101,15 +101,34 @@ import {
   siNotion,
   siNotebooklm,
 } from 'simple-icons';
+import {
+  buildHandoffPacket,
+  createArtifactId,
+  downloadJson,
+  loadWorkspaceSnapshot,
+  saveWorkspaceSnapshot,
+  type FoundryHandoffPacket,
+  type HandoffDestination,
+  type FoundryWorkspaceSnapshot,
+} from './foundry/contracts';
 
 const assetUrl = (path: string) => `${import.meta.env.BASE_URL}${path.replace(/^\//, '')}`;
 
 // --- Types ---
 
+type ContentItemType = 'video' | 'audio' | 'pdf' | 'blog' | 'short' | 'thumbnail' | 'image' | 'post' | 'manifest';
+
 interface ContentItem {
   id: string;
   beastId: string;
-  type: 'video' | 'audio' | 'pdf' | 'blog' | 'short' | 'thumbnail' | 'image' | 'post';
+  artifactId?: string;
+  version?: number;
+  projectId?: string;
+  mimeType?: string;
+  sourceApp?: 'content-foundry' | 'office-suites' | 'leeway-ide' | 'crm-erp';
+  status?: 'available' | 'processing' | 'ready' | 'handoff-staged' | 'error';
+  lastHandoffDestination?: HandoffDestination;
+  type: ContentItemType;
   name: string;
   category: string;
   timestamp: string;
@@ -290,7 +309,7 @@ interface WorkflowNode {
   config: Record<string, any>;
   content?: Record<string, any>;
   schedule?: Record<string, any>;
-  status: 'idle' | 'running' | 'processing' | 'complete' | 'error';
+  status: 'idle' | 'running' | 'processing' | 'complete' | 'prepared' | 'error';
   programming?: boolean;
   platform?: string;
   isCollapsed?: boolean;
@@ -337,6 +356,8 @@ const DEFAULT_SETTINGS: UISettings = {
   galaxyDensity: 700,
   galaxyStyle: 'all',
 };
+
+const DEFAULT_PROJECT_ID = 'LEEWAY-BDC-CONTENT-FOUNDRY';
 
 // --- Constants ---
 
@@ -512,6 +533,47 @@ const INITIAL_EDGES: WorkflowEdge[] = [
   { id: 'edge-5', sourceNodeId: 'node-movie', targetNodeId: 'node-tk' }
 ];
 
+function getWorkflowExecutionOrder(workflowNodes: WorkflowNode[], workflowEdges: WorkflowEdge[]): WorkflowNode[] {
+  const indegree = new Map(workflowNodes.map((node) => [node.id, 0]));
+  const outgoing = new Map<string, string[]>();
+
+  workflowEdges.forEach((edge) => {
+    if (!indegree.has(edge.sourceNodeId) || !indegree.has(edge.targetNodeId)) return;
+    indegree.set(edge.targetNodeId, (indegree.get(edge.targetNodeId) || 0) + 1);
+    outgoing.set(edge.sourceNodeId, [...(outgoing.get(edge.sourceNodeId) || []), edge.targetNodeId]);
+  });
+
+  const queue = workflowNodes
+    .filter((node) => indegree.get(node.id) === 0)
+    .sort((a, b) => (a.position.y - b.position.y) || (a.position.x - b.position.x));
+  const ordered: WorkflowNode[] = [];
+
+  while (queue.length > 0) {
+    const next = queue.shift();
+    if (!next) break;
+    ordered.push(next);
+
+    (outgoing.get(next.id) || []).forEach((targetId) => {
+      const nextDegree = (indegree.get(targetId) || 0) - 1;
+      indegree.set(targetId, nextDegree);
+      if (nextDegree === 0) {
+        const target = workflowNodes.find((node) => node.id === targetId);
+        if (target) queue.push(target);
+      }
+    });
+  }
+
+  // A cycle should never be silently ignored. Run the remaining nodes in a stable
+  // order so the UI can finish while the notification identifies the graph issue.
+  if (ordered.length !== workflowNodes.length) {
+    const alreadyOrdered = new Set(ordered.map((node) => node.id));
+    ordered.push(...workflowNodes.filter((node) => !alreadyOrdered.has(node.id))
+      .sort((a, b) => (a.position.y - b.position.y) || (a.position.x - b.position.x)));
+  }
+
+  return ordered;
+}
+
 // --- Port Menu ---
 
 // --- Content Wallet ---
@@ -521,13 +583,15 @@ const ContentWallet = ({
   onDragStart, 
   settings,
   content: walletContent,
-  onUpload
+  onUpload,
+  onCreateHandoff
 }: { 
   onClose: () => void, 
   onDragStart: (item: ContentItem) => void,
   settings: UISettings,
   content: ContentItem[],
-  onUpload: (file: File) => void
+  onUpload: (file: File) => void,
+  onCreateHandoff: (destination: HandoffDestination, item: ContentItem) => void
 }) => {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all' | 'video' | 'pdf' | 'blog' | 'short' | 'thumbnail'>('all');
@@ -558,7 +622,10 @@ const ContentWallet = ({
       <div className="p-4 border-b border-white/10 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Wallet size={16} className="text-brand-primary" style={{ color: settings.accentColor }} />
-          <h2 className="text-xs font-black uppercase tracking-widest text-white">Content Wallet</h2>
+          <div>
+            <h2 className="text-xs font-black uppercase tracking-widest text-white">Content Vault</h2>
+            <p className="mt-1 text-[8px] font-bold uppercase tracking-widest text-slate-500">Project working set • drag to canvas</p>
+          </div>
         </div>
         <button onClick={onClose} className="text-slate-500 hover:text-white transition-colors">
           <X size={16} />
@@ -580,7 +647,7 @@ const ContentWallet = ({
           />
           <CloudUpload size={24} className="text-slate-500 group-hover:text-brand-primary transition-colors" />
           <div className="text-center">
-            <p className="text-[9px] font-black uppercase text-white tracking-widest">Upload to Wallet</p>
+          <p className="text-[9px] font-black uppercase text-white tracking-widest">Add to Content Vault</p>
             <p className="text-[7px] text-slate-500 font-bold uppercase mt-0.5">PDF, Video, Audio, Img</p>
           </div>
         </div>
@@ -620,7 +687,11 @@ const ContentWallet = ({
             animate={{ y: 0, opacity: 1 }}
             transition={{ delay: idx * 0.05 }}
             draggable
-            onDragStart={() => onDragStart(item)}
+            onDragStart={(event) => {
+              event.dataTransfer.setData('application/leeway-content-vault', JSON.stringify(item));
+              event.dataTransfer.effectAllowed = 'copy';
+              onDragStart(item);
+            }}
             className="group bg-slate-900/50 border border-white/5 rounded-xl overflow-hidden hover:border-brand-primary/30 transition-all cursor-grab active:cursor-grabbing"
           >
             {/* Live Preview Header */}
@@ -654,6 +725,23 @@ const ContentWallet = ({
                   <p className="text-[8px] text-slate-400 italic line-clamp-2">"{item.content}"</p>
                 </div>
               )}
+
+              <div className="mt-3 flex items-center gap-1.5 border-t border-white/5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => onCreateHandoff('office-suites', item)}
+                  className="flex-1 rounded-md border border-cyan-400/20 bg-cyan-400/5 px-2 py-1.5 text-[8px] font-black uppercase tracking-widest text-cyan-300 transition-colors hover:bg-cyan-400/15"
+                >
+                  Send to Office
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onCreateHandoff('leeway-ide', item)}
+                  className="flex-1 rounded-md border border-violet-400/20 bg-violet-400/5 px-2 py-1.5 text-[8px] font-black uppercase tracking-widest text-violet-300 transition-colors hover:bg-violet-400/15"
+                >
+                  Send to IDE
+                </button>
+              </div>
             </div>
           </motion.div>
         ))}
@@ -668,7 +756,7 @@ const ContentWallet = ({
       <div className="p-3 bg-black/40 border-t border-white/5">
         <div className="flex items-center gap-2 opacity-60">
           <Database size={10} className="text-slate-400" />
-          <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">Storage: 4 / 100 Content Items Used</span>
+          <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">Vault: {walletContent.length} active artifact{walletContent.length === 1 ? '' : 's'}</span>
         </div>
       </div>
     </motion.div>
@@ -1071,11 +1159,11 @@ const AgentLeeLive = ({
     const handleSaveToWallet = (e: any) => {
       const item = e.detail;
       onSaveToWallet(item);
-      speak(`Consider it done! I've tucked ${item.beastId} away in your content wallet safe and sound.`);
+      speak(`Consider it done! I've tucked ${item.beastId} away in your Content Vault safe and sound.`);
     };
 
     const handleSuccess = () => {
-      speak("There we go! All done. I've saved the result back to your content wallet for you. You want to verify the output?");
+      speak("There we go! All done. I've saved the result back to your Content Vault for you. You want to verify the output?");
     };
 
     window.addEventListener('re-edit-node', handleReEdit as any);
@@ -1373,7 +1461,7 @@ const NodePalette = ({
           }}
         >
           <Wallet size={14} />
-          <span>Content Wallet</span>
+          <span>Content Vault</span>
           <div className="ml-auto w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
         </motion.button>
       </div>
@@ -1599,7 +1687,7 @@ const PropertiesPanel = ({ node, onUpdateNode, onDeleteNode, settings }: {
                 style={{ color: settings.accentColor, borderColor: settings.accentColor + '40' }}
               >
                 <Save size={12} />
-                Save to Wallet
+                    Save to Vault
               </button>
             </div>
           </motion.div>
@@ -2383,7 +2471,7 @@ const NodeCard: React.FC<NodeCardProps & {
               {node.category.replace('_', ' ')}
             </span>
             <span className="text-[7px] text-slate-600 font-mono font-bold uppercase tracking-tighter">
-              {node.content?.beastId || 'ID_GEN'}
+              {node.content?.beastId || node.content?.artifact_ref || 'ID_GEN'}
             </span>
           </div>
           
@@ -2416,8 +2504,8 @@ const NodeCard: React.FC<NodeCardProps & {
           <div className="flex-1 min-w-0">
             <h4 className="text-[12px] font-black text-white truncate leading-tight tracking-tight uppercase italic">{node.title}</h4>
             <div className="flex items-center gap-1.5 mt-1">
-               <div className={`w-1 h-1 rounded-full ${node.status === 'complete' ? 'bg-green-500' : 'bg-brand-primary'}`} style={{ backgroundColor: node.status === 'complete' ? undefined : accentColor }} />
-               <p className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">{node.status}</p>
+               <div className={`w-1 h-1 rounded-full ${node.status === 'complete' ? 'bg-green-500' : node.status === 'prepared' ? 'bg-amber-400' : 'bg-brand-primary'}`} style={{ backgroundColor: node.status === 'complete' || node.status === 'prepared' ? undefined : accentColor }} />
+               <p className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">{node.status === 'prepared' ? 'prepared / connector pending' : node.status}</p>
             </div>
           </div>
         </div>
@@ -2432,7 +2520,7 @@ const NodeCard: React.FC<NodeCardProps & {
             ))}
             <div className="bg-brand-primary/5 border border-brand-primary/10 rounded-lg p-2 flex items-center justify-between" style={{ backgroundColor: accentColor + '05', borderColor: accentColor + '20' }}>
                <span className="text-[7px] text-slate-500 font-black uppercase tracking-widest">Receipt Identity</span>
-               <span className="text-[8px] font-mono font-bold" style={{ color: accentColor }}>{node.content?.beastId}</span>
+               <span className="text-[8px] font-mono font-bold" style={{ color: accentColor }}>{node.content?.beastId || node.content?.artifact_ref || 'PENDING'}</span>
             </div>
           </div>
 
@@ -2554,7 +2642,7 @@ const MetallicBackground: React.FC<{ camera: { x: number; y: number; zoom: numbe
   );
 };
 
-const SettingsModal = ({ settings, setSettings, isOpen, onClose }: { settings: UISettings, setSettings: (s: UISettings) => void, isOpen: boolean, onClose: () => void }) => {
+const SettingsModal = ({ settings, setSettings, projectId, setProjectId, isOpen, onClose }: { settings: UISettings, setSettings: (s: UISettings) => void, projectId: string, setProjectId: (id: string) => void, isOpen: boolean, onClose: () => void }) => {
   if (!isOpen) return null;
 
   return (
@@ -2583,6 +2671,24 @@ const SettingsModal = ({ settings, setSettings, isOpen, onClose }: { settings: U
         </div>
 
         <div className="flex-1 overflow-y-auto p-8 space-y-12 custom-scrollbar">
+          {/* Continuum project identity */}
+          <section className="space-y-4">
+            <div className="flex items-center gap-2">
+              <Layers size={14} className="text-cyan-400" />
+              <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Continuum Project Identity</h3>
+            </div>
+            <div className="p-4 bg-cyan-400/5 rounded-2xl border border-cyan-400/15 space-y-2">
+              <label className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Project ID</label>
+              <input
+                value={projectId}
+                onChange={(event) => setProjectId(event.target.value.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '-') || DEFAULT_PROJECT_ID)}
+                className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-xs font-mono text-cyan-200 outline-none focus:border-cyan-400/60"
+                placeholder="LEEWAY-BDC-PROJECT"
+              />
+              <p className="text-[9px] leading-relaxed text-slate-500">This identity travels with Content Vault artifacts and Office / IDE handoff packets.</p>
+            </div>
+          </section>
+
           {/* Accent Color */}
           <section className="space-y-4">
              <div className="flex items-center gap-2">
@@ -3169,16 +3275,33 @@ const CreationTimeline = ({ isOpen, onClose, items, settings }: {
 };
 
 export default function App() {
-  const [nodes, setNodes] = useState<WorkflowNode[]>(INITIAL_NODES);
-  const [edges, setEdges] = useState<WorkflowEdge[]>(INITIAL_EDGES);
-  const [walletContent, setWalletContent] = useState<ContentItem[]>(INITIAL_MOCK_CONTENT);
+  const [restoredWorkspace] = useState<FoundryWorkspaceSnapshot>(() => loadWorkspaceSnapshot<FoundryWorkspaceSnapshot>({
+    schemaVersion: 1,
+    projectId: DEFAULT_PROJECT_ID,
+    nodes: INITIAL_NODES,
+    edges: INITIAL_EDGES,
+    walletContent: INITIAL_MOCK_CONTENT,
+    createdItems: [],
+    settings: DEFAULT_SETTINGS,
+    camera: { x: 0, y: 0, zoom: 0.73 },
+    handoffs: [],
+  }));
+
+  const restoredSettings = restoredWorkspace.settings && typeof restoredWorkspace.settings === 'object'
+    ? { ...DEFAULT_SETTINGS, ...(restoredWorkspace.settings as Partial<UISettings>) }
+    : DEFAULT_SETTINGS;
+
+  const [projectId, setProjectId] = useState(restoredWorkspace.projectId || DEFAULT_PROJECT_ID);
+  const [nodes, setNodes] = useState<WorkflowNode[]>(restoredWorkspace.nodes as WorkflowNode[]);
+  const [edges, setEdges] = useState<WorkflowEdge[]>(restoredWorkspace.edges as WorkflowEdge[]);
+  const [walletContent, setWalletContent] = useState<ContentItem[]>(restoredWorkspace.walletContent as ContentItem[]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [camera, setCamera] = useState<Camera>({ x: 0, y: 0, zoom: 0.73 });
+  const [camera, setCamera] = useState<Camera>(restoredWorkspace.camera);
   const [dragEdge, setDragEdge] = useState<{ fromNodeId: string, toX: number, toY: number } | null>(null);
   const [portMenu, setPortMenu] = useState<{ nodeId: string, type: 'in' | 'out', x: number, y: number } | null>(null);
   const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false);
   const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(false);
-  const [settings, setSettings] = useState<UISettings>(DEFAULT_SETTINGS);
+  const [settings, setSettings] = useState<UISettings>(restoredSettings);
   const [isCreationsOpen, setIsCreationsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isContentWalletOpen, setIsContentWalletOpen] = useState(false);
@@ -3186,7 +3309,22 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [notification, setNotification] = useState<string | null>(null);
 
-  const [createdItems, setCreatedItems] = useState<CreatedItem[]>([]);
+  const [createdItems, setCreatedItems] = useState<CreatedItem[]>(restoredWorkspace.createdItems as CreatedItem[]);
+  const [handoffs, setHandoffs] = useState<FoundryHandoffPacket[]>(restoredWorkspace.handoffs);
+
+  useEffect(() => {
+    saveWorkspaceSnapshot({
+      schemaVersion: 1,
+      projectId,
+      nodes,
+      edges,
+      walletContent,
+      createdItems,
+      settings,
+      camera,
+      handoffs,
+    });
+  }, [camera, createdItems, edges, handoffs, nodes, projectId, settings, walletContent]);
 
   const handleAddCreation = (item: CreatedItem) => {
     setCreatedItems((prev: CreatedItem[]) => [item, ...prev]);
@@ -3204,46 +3342,107 @@ export default function App() {
 
   const runWorkflow = () => {
     if (nodes.length === 0 || isProcessing) return;
-    
+
+    const executionOrder = getWorkflowExecutionOrder(nodes, edges);
+    const runId = `run-${Date.now()}`;
+    const startedAt = new Date().toISOString();
+
     setIsProcessing(true);
-    setNotification("Sequence Initiated: Processing Foundry Chain...");
-    
+    setNotification('Sequence initiated: local orchestration preview; external publishing is not claimed.');
+
     const processNext = (index: number) => {
-      if (index >= nodes.length) {
+      if (index >= executionOrder.length) {
+        const completedAt = new Date().toISOString();
+        const runManifest = {
+          schemaVersion: 'leeway.foundry-run.v1',
+          runId,
+          projectId,
+          sourceApp: 'content-foundry',
+          startedAt,
+          completedAt,
+          executionMode: 'local-preview',
+          externalExecution: 'not-claimed',
+          nodes: executionOrder.map((node) => ({
+            nodeId: node.id,
+            title: node.title,
+            category: node.category,
+            state: node.category === 'platform' ? 'prepared-for-connector' : 'local-preview-complete',
+          })),
+          edges,
+          nextGate: 'Connect an authorized runtime adapter before external publishing or deployment.',
+        };
+        const manifestText = JSON.stringify(runManifest, null, 2);
+
         setIsProcessing(false);
-        setNotification("Foundry Sequence Complete: Results Dispatched to Wallet");
-        setTimeout(() => setNotification(null), 3000);
-        
+        setNotification('Local sequence complete. Run manifest saved to the Content Vault; no external publish was claimed.');
+        setTimeout(() => setNotification(null), 4500);
+
         handleSaveToWallet({
-          id: `conv-${Date.now()}`,
-          beastId: `LEEWAY-CONV-${Math.floor(Math.random() * 9000) + 1000}`,
-          type: 'video',
-          name: 'Final Rendered Masterpiece.mp4',
-          category: 'Converted',
+          id: `run-manifest-${runId}`,
+          beastId: `LEEWAY-RUN-${runId.replace('run-', '')}`,
+          artifactId: createArtifactId(`RUN-${runId}`),
+          version: 1,
+          projectId,
+          sourceApp: 'content-foundry',
+          mimeType: 'application/json',
+          status: 'ready',
+          type: 'manifest',
+          name: `Foundry Run ${runId} — local preview manifest.json`,
+          category: 'Workflow Evidence',
           timestamp: new Date().toLocaleString(),
-          fileData: 'MOCK_DATA'
+          content: manifestText,
         });
-        
-        // Trigger Lee's success voice if active
-        window.dispatchEvent(new CustomEvent('workflow-success'));
+
+        window.dispatchEvent(new CustomEvent('workflow-success', { detail: runManifest }));
         return;
       }
 
-      const node = nodes[index];
-      setNodes((prev: WorkflowNode[]) => prev.map((n: WorkflowNode) => n.id === node.id ? { ...n, status: 'processing', programming: true } : n));
-      
-      setTimeout(() => {
-        setNodes((prev: WorkflowNode[]) => prev.map((n: WorkflowNode) => n.id === node.id ? { ...n, status: 'complete', programming: false } : n));
+      const node = executionOrder[index];
+      setNodes((prev: WorkflowNode[]) => prev.map((n: WorkflowNode) => n.id === node.id
+        ? {
+            ...n,
+            status: 'processing',
+            programming: true,
+            content: {
+              ...(n.content || {}),
+              execution: { runId, state: 'running', executionMode: n.category === 'platform' ? 'connector-preparation' : 'local-preview', startedAt: new Date().toISOString() },
+            },
+          }
+        : n));
+
+      window.setTimeout(() => {
+        setNodes((prev: WorkflowNode[]) => prev.map((n: WorkflowNode) => n.id === node.id
+          ? {
+              ...n,
+              status: n.category === 'platform' ? 'prepared' : 'complete',
+              programming: false,
+              content: {
+                ...(n.content || {}),
+                execution: { runId, state: n.category === 'platform' ? 'prepared-for-connector' : 'local-preview-complete', executionMode: n.category === 'platform' ? 'connector-preparation' : 'local-preview', completedAt: new Date().toISOString() },
+              },
+            }
+          : n));
         processNext(index + 1);
-      }, 1500);
+      }, 700);
     };
 
     processNext(0);
   };
 
   const handleSaveApp = () => {
-    setNotification("Foundry State Synchronized Locally");
-    setTimeout(() => setNotification(null), 2500);
+    const saved = saveWorkspaceSnapshot({
+      schemaVersion: 1,
+      projectId,
+      nodes,
+      edges,
+      walletContent,
+      createdItems,
+      settings,
+      camera,
+      handoffs,
+    });
+    setNotification(saved ? 'Foundry workspace saved to the local Content Vault.' : 'Workspace save failed; local storage is unavailable.');
+    setTimeout(() => setNotification(null), 3000);
   };
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -3260,6 +3459,12 @@ export default function App() {
       const newItem: ContentItem = {
         id: `c-${Date.now()}`,
         beastId: `LEEWAY-${type.toUpperCase().substring(0, 1)}-${Math.floor(Math.random() * 9000) + 1000}`,
+        artifactId: createArtifactId(file.name),
+        version: 1,
+        projectId,
+        sourceApp: 'content-foundry',
+        mimeType: file.type || 'application/octet-stream',
+        status: 'available',
         type: type as any,
         name: file.name,
         category: 'Uploaded',
@@ -3308,11 +3513,45 @@ export default function App() {
   };
 
   const handleContentDragStart = (item: ContentItem) => {
-    // Optionally store the dragged item info
+    setNotification(`Staged ${item.name} from the Content Vault. Drop it onto the canvas to create a source node.`);
+    window.setTimeout(() => setNotification(null), 3500);
   };
 
   const handleDrop = (e: React.DragEvent) => {
-    // Logic to handle dropping content into the workflow to create a node
+    e.preventDefault();
+    const payload = e.dataTransfer.getData('application/leeway-content-vault');
+    if (!payload || !containerRef.current) return;
+
+    try {
+      const item = JSON.parse(payload) as ContentItem;
+      const rect = containerRef.current.getBoundingClientRect();
+      const worldX = (e.clientX - rect.left - camera.x) / camera.zoom;
+      const worldY = (e.clientY - rect.top - camera.y) / camera.zoom;
+      const newNode: WorkflowNode = {
+        id: `content-${item.id}-${Date.now()}`,
+        type: 'live_wallet_item',
+        category: 'content',
+        title: item.name,
+        position: { x: worldX, y: worldY },
+        config: { locked_source: true, project_id: projectId },
+        content: {
+          ...item,
+          artifact_ref: item.artifactId || item.beastId,
+          source_app: item.sourceApp || 'content-foundry',
+        },
+        status: 'idle',
+      };
+
+      setNodes((prev: WorkflowNode[]) => [...prev, newNode]);
+      setSelectedNodeId(newNode.id);
+      setIsContentWalletOpen(false);
+      setNotification(`Added ${item.name} to the workflow as a governed source artifact.`);
+      window.setTimeout(() => setNotification(null), 3000);
+    } catch (error) {
+      console.error('Content Vault drop rejected:', error);
+      setNotification('Content Vault drop rejected: the artifact packet was invalid.');
+      window.setTimeout(() => setNotification(null), 3000);
+    }
   };
 
   const handlePortClick = (nodeId: string, type: 'in' | 'out', e: React.MouseEvent) => {
@@ -3392,8 +3631,51 @@ export default function App() {
 
   const selectedNode = nodes.find((n: WorkflowNode) => n.id === selectedNodeId) || null;
 
+  const handleCreateHandoff = (destination: HandoffDestination, item: ContentItem) => {
+    const packet = buildHandoffPacket({
+      destination,
+      projectId,
+      item: item as unknown as Record<string, unknown>,
+      nodes,
+      edges,
+    });
+
+    setHandoffs((prev) => [packet, ...prev.filter((existing) => existing.handoffId !== packet.handoffId)]);
+    downloadJson(`${packet.handoffId}.json`, packet);
+
+    const destinationLabel = destination === 'leeway-ide' ? 'Leeway IDE' : 'Office Suites';
+    const handoffArtifact: ContentItem = {
+      id: `handoff-${packet.handoffId}`,
+      beastId: packet.handoffId,
+      artifactId: createArtifactId(packet.handoffId),
+      version: 1,
+      projectId,
+      sourceApp: 'content-foundry',
+      mimeType: 'application/json',
+      status: 'handoff-staged',
+      lastHandoffDestination: destination,
+      type: 'manifest',
+      name: `${item.name} → ${destinationLabel} handoff.json`,
+      category: 'Handoff Packet',
+      timestamp: new Date().toLocaleString(),
+      content: JSON.stringify(packet, null, 2),
+    };
+
+    setWalletContent((prev: ContentItem[]) => [handoffArtifact, ...prev]);
+    setNotification(`Handoff staged for ${destinationLabel}. Portable packet downloaded; receiving runtime has not been claimed.`);
+    window.setTimeout(() => setNotification(null), 5000);
+  };
+
   const handleSaveToWallet = (item: ContentItem) => {
-    setWalletContent((prev: ContentItem[]) => [item, ...prev]);
+    const normalizedItem: ContentItem = {
+      ...item,
+      artifactId: item.artifactId || createArtifactId(item.id),
+      version: item.version || 1,
+      projectId: item.projectId || projectId,
+      sourceApp: item.sourceApp || 'content-foundry',
+      status: item.status || 'ready',
+    };
+    setWalletContent((prev: ContentItem[]) => [normalizedItem, ...prev.filter((existing) => existing.id !== normalizedItem.id)]);
   };
 
   return (
@@ -3423,6 +3705,8 @@ export default function App() {
           <SettingsModal 
             settings={settings} 
             setSettings={setSettings} 
+            projectId={projectId}
+            setProjectId={setProjectId}
             isOpen={isSettingsOpen} 
             onClose={() => setIsSettingsOpen(false)} 
           />
@@ -3437,6 +3721,7 @@ export default function App() {
             onDragStart={handleContentDragStart}
             content={walletContent}
             onUpload={handleFileUpload}
+            onCreateHandoff={handleCreateHandoff}
           />
         )}
       </AnimatePresence>
@@ -3499,6 +3784,7 @@ export default function App() {
             <div className="flex items-center gap-4 text-[9px] font-black text-slate-500 uppercase tracking-widest italic">
               <span>Nodes: {nodes.length}</span>
               <span>Zoom: {Math.round(camera.zoom * 100)}%</span>
+              <span className="text-cyan-400/80">Project: {projectId}</span>
             </div>
           </div>
 
@@ -3573,6 +3859,8 @@ export default function App() {
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onWheel={handleWheel}
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={handleDrop}
           onClick={() => {
             setSelectedNodeId(null);
             setPortMenu(null);
@@ -3681,8 +3969,8 @@ export default function App() {
                 <div className="text-[10px] text-white font-mono">LEEWAY-PRO-9283</div>
              </div>
              <div className="glass px-4 py-2 rounded-lg border-b-2 border-green-500">
-                <div className="text-[8px] text-slate-500 uppercase font-bold mb-1">Foundry Status</div>
-                <div className="text-[10px] text-green-400 font-mono">OPERATIONAL</div>
+                <div className="text-[8px] text-slate-500 uppercase font-bold mb-1">Foundry Runtime</div>
+                <div className="text-[10px] text-amber-300 font-mono">LOCAL PREVIEW · CONNECTOR PENDING</div>
              </div>
           </div>
         </div>

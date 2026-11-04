@@ -1,10 +1,10 @@
 # Current State
 
-Date: 2026-04-29
+Date: 2026-11-04
 
 ## Status Summary
 
-The application is in an advanced MVP/early production-hardening state with live UI orchestration, generated runtime manifests, governance checks, and CI build validation.
+The application is in an advanced MVP/early production-hardening state with live UI orchestration, a durable local Content Vault working set, portable Office/IDE handoffs, generated runtime manifests, governance checks, and CI build validation.
 
 ## Completed Areas
 
@@ -16,7 +16,12 @@ The application is in an advanced MVP/early production-hardening state with live
   - Minimize visibility
   - Collapsed connection alignment
   - Color-coded edges
-- Content Wallet naming update
+- Content Vault working-set model with project identity and local workspace persistence
+- Portable `leeway.handoff.v1` packets for Office Suites and Leeway IDE
+- Local dependency-ordered workflow preview with run evidence manifests
+- Explicit `prepared / connector pending` state for platform steps; no external publish is claimed without connector evidence
+- Drag-and-drop transfer from Content Vault to the workflow canvas
+- Content Vault naming update
 - Logo placement updates and right-panel messaging
 - Tailwind CSS editor-rule support in workspace settings
 
@@ -28,12 +33,13 @@ The application is in an advanced MVP/early production-hardening state with live
 
 ## Known Technical Notes
 
-- Type-checking outside the app boundary may include unrelated nested workspace errors.
-- Primary release confidence should rely on project build pipeline and governance checks.
+- Shared Continuum, Runtime Fabric, Office Suites, Leeway IDE, and platform publish adapters are not claimed as live by the browser-only preview.
+- Workspace persistence currently uses browser local storage; large binary payloads may require a shared artifact adapter before production rollout.
+- Primary release confidence should rely on project build pipeline, browser acceptance checks, and governance evidence.
 
 ## Next Milestones
 
-1. Full deploy connector verification per platform
-2. Runtime deployment truth panels and test evidence
-3. Expanded analytics for workflow execution outcomes
-4. Structured pilot onboarding for partner teams
+1. Connect the Content Vault contract to the authorized shared Continuum/Digital Brain artifact adapter
+2. Add authenticated Office Suites and Leeway IDE receivers for `leeway.handoff.v1`
+3. Add full deploy connector verification per platform and runtime deployment truth panels
+4. Expand analytics for workflow execution outcomes and structured pilot onboarding
