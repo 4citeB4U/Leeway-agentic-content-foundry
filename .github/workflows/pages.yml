@@ -39,7 +39,7 @@ jobs:
 
       - name: Build site for Pages
         env:
-          VITE_BASE_PATH: /beast-ai-agentic-content-foundry/
+          VITE_BASE_PATH: /Leeway-agentic-content-foundry/
         run: npm run build
 
       - name: Upload Pages artifact
