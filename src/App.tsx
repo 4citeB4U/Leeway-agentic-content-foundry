@@ -584,14 +584,16 @@ const ContentWallet = ({
   settings,
   content: walletContent,
   onUpload,
-  onCreateHandoff
+  onCreateHandoff,
+  onExportWorkspace
 }: { 
   onClose: () => void, 
   onDragStart: (item: ContentItem) => void,
   settings: UISettings,
   content: ContentItem[],
   onUpload: (file: File) => void,
-  onCreateHandoff: (destination: HandoffDestination, item: ContentItem) => void
+  onCreateHandoff: (destination: HandoffDestination, item: ContentItem) => void,
+  onExportWorkspace: () => void
 }) => {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all' | 'video' | 'pdf' | 'blog' | 'short' | 'thumbnail'>('all');
@@ -627,9 +629,14 @@ const ContentWallet = ({
             <p className="mt-1 text-[8px] font-bold uppercase tracking-widest text-slate-500">Project working set • drag to canvas</p>
           </div>
         </div>
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={onExportWorkspace} className="rounded-md border border-cyan-500/30 bg-cyan-950/40 px-2 py-1 text-[9px] font-bold text-cyan-200" title="Download the actual Content Foundry workspace for migration to the standalone Content Vault">
+            Export Vault
+          </button>
         <button onClick={onClose} className="text-slate-500 hover:text-white transition-colors">
           <X size={16} />
         </button>
+        </div>
       </div>
 
       <div className="p-3 space-y-3">
@@ -3722,6 +3729,10 @@ export default function App() {
             content={walletContent}
             onUpload={handleFileUpload}
             onCreateHandoff={handleCreateHandoff}
+            onExportWorkspace={() => downloadJson('leeway-content-foundry-vault-workspace.json', {
+              schemaVersion: 1, projectId, nodes, edges, walletContent,
+              createdItems, settings, camera, handoffs,
+            })}
           />
         )}
       </AnimatePresence>
