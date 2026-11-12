@@ -1,5 +1,6 @@
 <!--
 LEEWAY HEADER — DO NOT REMOVE
+DISCOVERY_PIPELINE: Voice → Intent → Location → Vertical → Ranking → Render
 REGION: LEEWAY.ECOSYSTEM.REPOSITORY.ADMISSION
 TAG: LEEWAY.REPOSITORY.GOVERNED.WORKER.V1
 5WH:
@@ -9,7 +10,7 @@ WHO = Creator/Human Authority and this source repository's current owner.
 WHERE = AGENTS.md in 4citeB4U/Leeway-agentic-content-foundry.
 WHEN = 2026-11-12.
 HOW = Approved Standards and operating contracts first-read; original Runtime and independent acceptance.
-LICENSE = Existing repository terms; no new license asserted.
+LICENSE: Existing repository terms; no new license asserted.
 -->
 # LeeWay Universal Worker/LLM Admission
 
@@ -22,3 +23,7 @@ Every consequential operation defines applicable laws/regulations and jurisdicti
 Follow Investigate → Diagnose → Plan → Implement → Test → Validate → Repair → Retest → Verify → Evidence → Checkpoint → Continue. Use only original Machine Consciousness policy binding, Skill Orchestrator multi-skill capability weave and bounded authorized tools; parallel tasks must not conflict. Outside assistants BUILD → TEACH → ASSESS; permanently registered workers demonstrate independent transfer. Existing merit/grade system has separate issuer; badges cannot grant privilege. Existing Runtime workplane owns actual handoffs, not this file.
 
 Protect physical device-owned Digital Brain and Diagnostics and user data; do not assert model private thoughts or external weights were learned. Distinguish SOURCE_IMPLEMENTED, TESTED, CI_PASS, DEPLOYED, LIVE_OBSERVED, VERITAS_VERIFIED, QUALIFIED. Real model-host loading and runtime denial tests are needed before describing operational enforcement.
+
+## Final boundary — effective canonical law and work custody
+
+[Approved LeeWay Standards main](https://github.com/4citeB4U/LeeWay-Standards/commit/2e5e98bdc49cfe0bf180de394db054eaf2f8e3d3) supersedes earlier descriptions of PR #71 as pending. At handoff, preserve mission/work/correlation, current law, identity/grants, original sources, results, negative evidence, measurements, decisions, repairs, learning/practice qualification and next owning gate. Source/CI is not independent production admission.
